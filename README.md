@@ -1,32 +1,36 @@
-# AudioCraft
+# AudioCraft (revamp)
+
 ![docs badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_docs/badge.svg)
 ![linter badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_linter/badge.svg)
 ![tests badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_tests/badge.svg)
+
+This is a revamped fork of AudioCraft with dependency updates and expanded support for Intel ARC and Apple MPS
 
 AudioCraft is a PyTorch library for deep learning research on audio generation. AudioCraft contains inference and training code
 for two state-of-the-art AI generative models producing high-quality audio: AudioGen and MusicGen.
 
 
 ## Installation
-AudioCraft requires Python 3.9, PyTorch 2.1.0. To install AudioCraft, you can run the following:
+AudioCraft revamp requires [uv](https://docs.astral.sh/uv/). To install AudioCraft, you can run the following:
 
 ```shell
-# Best to make sure you have torch installed first, in particular before installing xformers.
-# Don't run this if you already have PyTorch installed.
-python -m pip install 'torch==2.1.0'
-# You might need the following before trying to install the packages
-python -m pip install setuptools wheel
-# Then proceed to one of the following
-python -m pip install -U audiocraft  # stable release
-python -m pip install -U git+https://git@github.com/facebookresearch/audiocraft#egg=audiocraft  # bleeding edge
-python -m pip install -e .  # or if you cloned the repo locally (mandatory if you want to train).
-python -m pip install -e '.[wm]'  # if you want to train a watermarking model
+uv python install 3.12
+git clone https://github.com/exdysa/facebookresearch-audiocraft-revamp.git
+uv pip install .
 ```
 
-We also recommend having `ffmpeg` installed, either through your system or Anaconda:
+`ffmpeg` should also be installed:
+
+- Linux with distro package manager
 ```bash
 sudo apt-get install ffmpeg
-# Or if you are using Anaconda or Miniconda
+```
+- MacOS using homebrew
+```zsh
+brew install ffmpeg
+```
+# Anaconda or Miniconda
+```
 conda install "ffmpeg<5" -c conda-forge
 ```
 
@@ -43,7 +47,7 @@ At the moment, AudioCraft contains the training code and inference code for:
 * [JASCO](./docs/JASCO.md): "High quality text-to-music model conditioned on chords, melodies and drum tracks"
 
 
-## Training code
+## Training code ( NOTE : Updated training modules not yet implemented in revamp)
 
 AudioCraft contains PyTorch components for deep learning research in audio and training pipelines for the developed models.
 For a general introduction of AudioCraft design principles and instructions to develop your own training pipeline, refer to
@@ -55,14 +59,14 @@ that provides pointers to configuration, example grids and model/task-specific i
 
 ## API documentation
 
-We provide some [API documentation](https://facebookresearch.github.io/audiocraft/api_docs/audiocraft/index.html) for AudioCraft.
+Facebook Research provides some [API documentation](https://facebookresearch.github.io/audiocraft/api_docs/audiocraft/index.html) for AudioCraft.
 
 
 ## FAQ
 
 #### Is the training code available?
 
-Yes! We provide the training code for [EnCodec](./docs/ENCODEC.md), [MusicGen](./docs/MUSICGEN.md),[Multi Band Diffusion](./docs/MBD.md) and [JASCO](./docs/JASCO.md).
+Yes! Facebook Research provides the training code for [EnCodec](./docs/ENCODEC.md), [MusicGen](./docs/MUSICGEN.md),[Multi Band Diffusion](./docs/MBD.md) and [JASCO](./docs/JASCO.md).
 
 #### Where are the models stored?
 
