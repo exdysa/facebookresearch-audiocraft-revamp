@@ -20,23 +20,22 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
-from xformers import ops
 
 from .rope import RotaryEmbedding
 from .streaming import StreamingModule
 
-_efficient_attention_backend: str = 'torch'
+_efficient_attention_backend: str = "torch"
 
 
-def set_efficient_attention_backend(backend: str = 'torch'):
+def set_efficient_attention_backend(backend: str = "torch"):
     # Using torch by default, it seems a bit faster on older P100 GPUs (~20% faster).
     global _efficient_attention_backend
-    assert _efficient_attention_backend in ['xformers', 'torch']
+    assert _efficient_attention_backend in ["xformers", "torch"]
     _efficient_attention_backend = backend
 
 
 def _get_attention_time_dimension(memory_efficient: bool) -> int:
-    if _efficient_attention_backend == 'torch' and memory_efficient:
+    if _efficient_attention_backend == "torch" and memory_efficient:
         return 2
     else:
         return 1
@@ -61,14 +60,13 @@ def create_norm_fn(norm_type: str, dim: int, **kwargs) -> nn.Module:
     Returns:
         nn.Module: Normalization module.
     """
-    if norm_type == 'layer_norm':
+    if norm_type == "layer_norm":
         return nn.LayerNorm(dim, eps=1e-5, **kwargs)
     else:
         raise ValueError(f"Unknown norm type: {norm_type}")
 
 
-def create_sin_embedding(positions: torch.Tensor, dim: int, max_period: float = 10000,
-                         dtype: torch.dtype = torch.float32) -> torch.Tensor:
+def create_sin_embedding(positions: torch.Tensor, dim: int, max_period: float = 10000, dtype: torch.dtype = torch.float32) -> torch.Tensor:
     """Create sinusoidal positional embedding, with shape `[B, T, C]`.
 
     Args:
@@ -93,20 +91,12 @@ def expand_repeated_kv(x: torch.Tensor, n_rep: int, memory_efficient: bool) -> t
     """torch.repeat_interleave(x, dim=2, repeats=n_rep) from xlformers."""
     if n_rep == 1:
         return x
-    if _efficient_attention_backend == 'torch' and memory_efficient:
+    if _efficient_attention_backend == "torch" and memory_efficient:
         bs, n_kv_heads, slen, head_dim = x.shape
-        return (
-            x[:, :, None, :, :]
-            .expand(bs, n_kv_heads, n_rep, slen, head_dim)
-            .reshape(bs, n_kv_heads * n_rep, slen, head_dim)
-        )
+        return x[:, :, None, :, :].expand(bs, n_kv_heads, n_rep, slen, head_dim).reshape(bs, n_kv_heads * n_rep, slen, head_dim)
     else:
         bs, slen, n_kv_heads, head_dim = x.shape
-        return (
-            x[:, :, :, None, :]
-            .expand(bs, slen, n_kv_heads, n_rep, head_dim)
-            .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
-        )
+        return x[:, :, :, None, :].expand(bs, slen, n_kv_heads, n_rep, head_dim).reshape(bs, slen, n_kv_heads * n_rep, head_dim)
 
 
 class LayerScale(nn.Module):
@@ -120,13 +110,11 @@ class LayerScale(nn.Module):
         device (torch.device or str, optional): Device on which to initialize the module.
         dtype (torch.dtype, optional): dtype to use to initialize the module.
     """
-    def __init__(self, channels: int, init: float = 1e-4, channel_last: bool = True,
-                 device=None, dtype=None):
+
+    def __init__(self, channels: int, init: float = 1e-4, channel_last: bool = True, device=None, dtype=None):
         super().__init__()
         self.channel_last = channel_last
-        self.scale = nn.Parameter(
-            torch.full((channels,), init,
-                       requires_grad=True, device=device, dtype=dtype))
+        self.scale = nn.Parameter(torch.full((channels,), init, requires_grad=True, device=device, dtype=dtype))
 
     def forward(self, x: torch.Tensor):
         if self.channel_last:
@@ -161,14 +149,28 @@ class StreamingMultiheadAttention(StreamingModule):
         device (torch.device, optional): Device on which to initialize.
         dtype (torch.dtype, optional): dtype to use.
     """
-    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0, bias: bool = True,
-                 causal: bool = False, past_context: tp.Optional[int] = None, custom: bool = False,
-                 memory_efficient: bool = False, attention_as_float32: bool = False,
-                 rope: tp.Optional[RotaryEmbedding] = None, cross_attention: bool = False,
-                 safe_streaming: bool = True, qk_layer_norm: bool = False, kv_repeat: int = 1,
-                 device=None, dtype=None):
+
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        dropout: float = 0.0,
+        bias: bool = True,
+        causal: bool = False,
+        past_context: tp.Optional[int] = None,
+        custom: bool = False,
+        memory_efficient: bool = False,
+        attention_as_float32: bool = False,
+        rope: tp.Optional[RotaryEmbedding] = None,
+        cross_attention: bool = False,
+        safe_streaming: bool = True,
+        qk_layer_norm: bool = False,
+        kv_repeat: int = 1,
+        device=None,
+        dtype=None,
+    ):
         super().__init__()
-        factory_kwargs = {'device': device, 'dtype': dtype}
+        factory_kwargs = {"device": device, "dtype": dtype}
         if past_context is not None:
             assert causal
 
@@ -210,9 +212,7 @@ class StreamingMultiheadAttention(StreamingModule):
         else:
             assert not qk_layer_norm
             assert kv_repeat == 1
-            self.mha = nn.MultiheadAttention(
-                embed_dim, num_heads, dropout=dropout, bias=bias, batch_first=True,
-                **factory_kwargs)
+            self.mha = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, bias=bias, batch_first=True, **factory_kwargs)
         self.qk_layer_norm = qk_layer_norm
         if qk_layer_norm:
             assert self.custom
@@ -236,32 +236,32 @@ class StreamingMultiheadAttention(StreamingModule):
         # convention both in the builtin MHA in Pytorch, and Xformers functions.
         time_dim = _get_attention_time_dimension(self.memory_efficient)
         if self.memory_efficient:
-            from xformers.ops import LowerTriangularMask
             if current_steps == 1:
-                # If we only have one step, then we do not need a mask.
                 return None
-            elif 'past_keys' in self._streaming_state:
+            elif "past_keys" in self._streaming_state:
                 raise RuntimeError("Not supported at the moment")
             else:
                 # Then we can safely use a lower triangular mask
-                return LowerTriangularMask()
+                try:
+                    from xformers.ops import LowerTriangularMask
+
+                    return LowerTriangularMask()
+                except ImportError:
+                    return None
+
         if self._streaming_state:
-            past_keys = self._streaming_state['past_keys']
+            past_keys = self._streaming_state["past_keys"]
             past_steps = past_keys.shape[time_dim]
         else:
             past_steps = 0
 
-        queries_pos = torch.arange(
-            past_steps, current_steps + past_steps, device=device).view(-1, 1)
+        queries_pos = torch.arange(past_steps, current_steps + past_steps, device=device).view(-1, 1)
         keys_pos = torch.arange(past_steps + current_steps, device=device).view(1, -1)
         delta = queries_pos - keys_pos
         valid = delta >= 0
         if self.past_context is not None:
-            valid &= (delta <= self.past_context)
-        return torch.where(
-            valid,
-            torch.zeros([], device=device, dtype=dtype),
-            torch.full([], float('-inf'), device=device, dtype=dtype))
+            valid &= delta <= self.past_context
+        return torch.where(valid, torch.zeros([], device=device, dtype=dtype), torch.full([], float("-inf"), device=device, dtype=dtype))
 
     def _complete_kv(self, k, v):
         time_dim = _get_attention_time_dimension(self.memory_efficient)
@@ -272,12 +272,12 @@ class StreamingMultiheadAttention(StreamingModule):
             return k, v
         # Complete the key/value pair using the streaming state.
         if self._streaming_state:
-            pk = self._streaming_state['past_keys']
+            pk = self._streaming_state["past_keys"]
             nk = torch.cat([pk, k], dim=time_dim)
             if v is k:
                 nv = nk
             else:
-                pv = self._streaming_state['past_values']
+                pv = self._streaming_state["past_values"]
                 nv = torch.cat([pv, v], dim=time_dim)
         else:
             nk = k
@@ -288,35 +288,32 @@ class StreamingMultiheadAttention(StreamingModule):
         if self.past_context is not None:
             offset = max(0, nk.shape[time_dim] - self.past_context)
         if self._is_streaming:
-            self._streaming_state['past_keys'] = nk[:, offset:]
+            self._streaming_state["past_keys"] = nk[:, offset:]
             if v is not k:
-                self._streaming_state['past_values'] = nv[:, offset:]
-            if 'offset' in self._streaming_state:
-                self._streaming_state['offset'] += offset
+                self._streaming_state["past_values"] = nv[:, offset:]
+            if "offset" in self._streaming_state:
+                self._streaming_state["offset"] += offset
             else:
-                self._streaming_state['offset'] = torch.tensor(0)
+                self._streaming_state["offset"] = torch.tensor(0)
         return nk, nv
 
     def _apply_rope(self, query: torch.Tensor, key: torch.Tensor):
         time_dim = _get_attention_time_dimension(self.memory_efficient)
         # Apply rope embeddings to query and key tensors.
         assert self.rope is not None
-        if 'past_keys' in self._streaming_state:
-            past_keys_offset = self._streaming_state['past_keys'].shape[1]
+        if "past_keys" in self._streaming_state:
+            past_keys_offset = self._streaming_state["past_keys"].shape[1]
         else:
             past_keys_offset = 0
-        if 'offset' in self._streaming_state:
-            past_context_offset = int(self._streaming_state['offset'].item())
+        if "offset" in self._streaming_state:
+            past_context_offset = int(self._streaming_state["offset"].item())
         else:
             past_context_offset = 0
         streaming_offset = past_context_offset + past_keys_offset
         return self.rope.rotate_qk(query, key, start=streaming_offset, time_dim=time_dim)
 
-    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor,
-                key_padding_mask=None, need_weights=False, attn_mask=None,
-                average_attn_weights=True, is_causal=False):
-        assert not is_causal, ("New param added in torch 2.0.1 not supported, "
-                               "use the causal args in the constructor.")
+    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, key_padding_mask=None, need_weights=False, attn_mask=None, average_attn_weights=True, is_causal=False):
+        assert not is_causal, "New param added in torch 2.0.1 not supported, use the causal args in the constructor."
 
         time_dim = _get_attention_time_dimension(self.memory_efficient)
         if time_dim == 2:
@@ -325,8 +322,7 @@ class StreamingMultiheadAttention(StreamingModule):
             layout = "b t h d"
         dtype = query.dtype
         if self._is_streaming:
-            assert self.causal or self.cross_attention, \
-                "Streaming only available for causal or cross attention"
+            assert self.causal or self.cross_attention, "Streaming only available for causal or cross attention"
 
         custom_attn_mask = attn_mask is not None
 
@@ -349,12 +345,12 @@ class StreamingMultiheadAttention(StreamingModule):
                     bias_q, bias_k, bias_v = None, None, None
                 else:
                     bias_q = self.in_proj_bias[:dim]
-                    bias_k = self.in_proj_bias[dim: 2 * dim]
-                    bias_v = self.in_proj_bias[2 * dim:]
+                    bias_k = self.in_proj_bias[dim : 2 * dim]
+                    bias_v = self.in_proj_bias[2 * dim :]
                 q = nn.functional.linear(query, self.in_proj_weight[:dim], bias_q)
                 # todo: when streaming, we could actually save k, v and check the shape actually match.
-                k = nn.functional.linear(key, self.in_proj_weight[dim: 2 * dim], bias_k)
-                v = nn.functional.linear(value, self.in_proj_weight[2 * dim:], bias_v)
+                k = nn.functional.linear(key, self.in_proj_weight[dim : 2 * dim], bias_k)
+                v = nn.functional.linear(value, self.in_proj_weight[2 * dim :], bias_v)
                 if self.qk_layer_norm is True:
                     q = self.q_layer_norm(q)
                     k = self.k_layer_norm(k)
@@ -371,15 +367,20 @@ class StreamingMultiheadAttention(StreamingModule):
                     else:
                         bound_layout = "b t p h d"
                     packed = rearrange(projected, f"b t (p h d) -> {bound_layout}", p=3, h=self.num_heads)
-                    q, k, v = ops.unbind(packed, dim=2)
+                    try:
+                        from xformers import ops
+
+                        q, k, v = ops.unbind(packed, dim=2)
+                    except ImportError:
+                        q, k, v = torch.unbind(packed, dim=2)
                 else:
                     embed_dim = self.embed_dim
-                    per_head_dim = (embed_dim // self.num_heads)
+                    per_head_dim = embed_dim // self.num_heads
                     kv_heads = self.num_heads // self.kv_repeat
                     q = projected[:, :, :embed_dim]
                     start = embed_dim
                     end = start + per_head_dim * kv_heads
-                    k = projected[:, :, start: end]
+                    k = projected[:, :, start:end]
                     v = projected[:, :, end:]
                     q = rearrange(q, f"b t (h d) -> {layout}", h=self.num_heads)
                     k = rearrange(k, f"b t (h d) -> {layout}", h=kv_heads)
@@ -409,11 +410,14 @@ class StreamingMultiheadAttention(StreamingModule):
                     attn_mask = attn_mask[..., :seq_len, :seq_len]
 
                 p = self.dropout if self.training else 0
-                if _efficient_attention_backend == 'torch':
-                    x = torch.nn.functional.scaled_dot_product_attention(
-                        q, k, v, is_causal=attn_mask is not None, dropout_p=p)
-                else:
-                    x = ops.memory_efficient_attention(q, k, v, attn_mask, p=p)
+                if _efficient_attention_backend == "torch":
+                    x = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=attn_mask is not None, dropout_p=p)
+                    try:
+                        from xformers import ops
+
+                        x = ops.memory_efficient_attention(q, k, v, attn_mask, p=p)
+                    except ImportError:
+                        pass
             else:
                 # We include the dot product as float32, for consistency
                 # with the other implementations that include that step
@@ -423,9 +427,9 @@ class StreamingMultiheadAttention(StreamingModule):
                 # extend a bit the range of operations done in float32,
                 # although this should make no difference.
                 q = q / q.shape[-1] ** 0.5
-                key_layout = layout.replace('t', 'k')
+                key_layout = layout.replace("t", "k")
                 query_layout = layout
-                if self._is_streaming and self.safe_streaming and q.device.type == 'cuda':
+                if self._is_streaming and self.safe_streaming and q.device.type == "cuda":
                     with torch.autocast(device_type=q.device.type, dtype=torch.float32):
                         pre_w = torch.einsum(f"{query_layout},{key_layout}-> b h t k", q, k)
                 else:
@@ -443,9 +447,7 @@ class StreamingMultiheadAttention(StreamingModule):
             key, value = self._complete_kv(key, value)
             if self.attention_as_float32:
                 query, key, value = [x.float() for x in [query, key, value]]
-            x, _ = self.mha(
-                query, key, value, key_padding_mask,
-                need_weights, attn_mask, average_attn_weights)
+            x, _ = self.mha(query, key, value, key_padding_mask, need_weights, attn_mask, average_attn_weights)
             x = x.to(dtype)
 
         return x, None
@@ -485,30 +487,45 @@ class StreamingTransformerLayer(nn.TransformerEncoderLayer):
         dtype (torch.dtype, optional): dtype to use.
         **kwargs: See `nn.TransformerEncoderLayer`.
     """
-    def __init__(self, d_model: int, num_heads: int, dim_feedforward: int = 2048, dropout: float = 0.1,
-                 bias_ff: bool = True, bias_attn: bool = True, causal: bool = False,
-                 past_context: tp.Optional[int] = None, custom: bool = False,
-                 memory_efficient: bool = False, attention_as_float32: bool = False,
-                 qk_layer_norm: bool = False, qk_layer_norm_cross: bool = False,
-                 cross_attention: bool = False, layer_scale: tp.Optional[float] = None,
-                 rope: tp.Optional[RotaryEmbedding] = None, attention_dropout: tp.Optional[float] = None,
-                 kv_repeat: int = 1, norm: str = 'layer_norm', device=None, dtype=None, **kwargs):
-        super().__init__(d_model, num_heads, dim_feedforward, dropout,
-                         device=device, dtype=dtype, batch_first=True, **kwargs)
-        factory_kwargs = {'device': device, 'dtype': dtype}
+
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        dim_feedforward: int = 2048,
+        dropout: float = 0.1,
+        bias_ff: bool = True,
+        bias_attn: bool = True,
+        causal: bool = False,
+        past_context: tp.Optional[int] = None,
+        custom: bool = False,
+        memory_efficient: bool = False,
+        attention_as_float32: bool = False,
+        qk_layer_norm: bool = False,
+        qk_layer_norm_cross: bool = False,
+        cross_attention: bool = False,
+        layer_scale: tp.Optional[float] = None,
+        rope: tp.Optional[RotaryEmbedding] = None,
+        attention_dropout: tp.Optional[float] = None,
+        kv_repeat: int = 1,
+        norm: str = "layer_norm",
+        device=None,
+        dtype=None,
+        **kwargs,
+    ):
+        super().__init__(d_model, num_heads, dim_feedforward, dropout, device=device, dtype=dtype, batch_first=True, **kwargs)
+        factory_kwargs = {"device": device, "dtype": dtype}
         # Redefine self_attn to our streaming multi-head attention
         attn_kwargs: tp.Dict[str, tp.Any] = {
-            'embed_dim': d_model,
-            'num_heads': num_heads,
-            'dropout': dropout if attention_dropout is None else attention_dropout,
-            'bias': bias_attn,
-            'custom': custom,
-            'memory_efficient': memory_efficient,
-            'attention_as_float32': attention_as_float32,
+            "embed_dim": d_model,
+            "num_heads": num_heads,
+            "dropout": dropout if attention_dropout is None else attention_dropout,
+            "bias": bias_attn,
+            "custom": custom,
+            "memory_efficient": memory_efficient,
+            "attention_as_float32": attention_as_float32,
         }
-        self.self_attn: StreamingMultiheadAttention = StreamingMultiheadAttention(
-            causal=causal, past_context=past_context, rope=rope, qk_layer_norm=qk_layer_norm,
-            kv_repeat=kv_repeat, **attn_kwargs, **factory_kwargs)  # type: ignore
+        self.self_attn: StreamingMultiheadAttention = StreamingMultiheadAttention(causal=causal, past_context=past_context, rope=rope, qk_layer_norm=qk_layer_norm, kv_repeat=kv_repeat, **attn_kwargs, **factory_kwargs)  # type: ignore
         # Redefine feedforward layers to expose bias parameter
         self.linear1 = nn.Linear(d_model, dim_feedforward, bias=bias_ff, **factory_kwargs)
         self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias_ff, **factory_kwargs)
@@ -524,9 +541,7 @@ class StreamingTransformerLayer(nn.TransformerEncoderLayer):
 
         self.cross_attention: tp.Optional[nn.Module] = None
         if cross_attention:
-            self.cross_attention = StreamingMultiheadAttention(
-                cross_attention=True, qk_layer_norm=qk_layer_norm_cross,
-                **attn_kwargs, **factory_kwargs)
+            self.cross_attention = StreamingMultiheadAttention(cross_attention=True, qk_layer_norm=qk_layer_norm_cross, **attn_kwargs, **factory_kwargs)
             # Norm and dropout
             self.dropout_cross = nn.Dropout(dropout)
             # eps value matching that used in PyTorch reference implementation.
@@ -539,37 +554,33 @@ class StreamingTransformerLayer(nn.TransformerEncoderLayer):
         self.norm1 = create_norm_fn(norm, d_model, **factory_kwargs)  # type: ignore
         self.norm2 = create_norm_fn(norm, d_model, **factory_kwargs)  # type: ignore
 
-    def _cross_attention_block(self, src: torch.Tensor,
-                               cross_attention_src: torch.Tensor) -> torch.Tensor:
+    def _cross_attention_block(self, src: torch.Tensor, cross_attention_src: torch.Tensor) -> torch.Tensor:
         assert self.cross_attention is not None
         # queries are from src, keys and values from cross_attention_src.
-        x = self.cross_attention(
-            src, cross_attention_src, cross_attention_src, need_weights=False)[0]
+        x = self.cross_attention(src, cross_attention_src, cross_attention_src, need_weights=False)[0]
         return self.dropout_cross(x)  # type: ignore
 
-    def forward(self, src: torch.Tensor, src_mask: tp.Optional[torch.Tensor] = None,  # type: ignore
-                src_key_padding_mask: tp.Optional[torch.Tensor] = None,
-                cross_attention_src: tp.Optional[torch.Tensor] = None):
+    def forward(
+        self,
+        src: torch.Tensor,
+        src_mask: tp.Optional[torch.Tensor] = None,  # type: ignore
+        src_key_padding_mask: tp.Optional[torch.Tensor] = None,
+        cross_attention_src: tp.Optional[torch.Tensor] = None,
+    ):
         if self.cross_attention is None:
             assert cross_attention_src is None
         else:
             assert cross_attention_src is not None
         x = src
         if self.norm_first:
-            x = x + self.layer_scale_1(
-                self._sa_block(self.norm1(x), src_mask, src_key_padding_mask))
+            x = x + self.layer_scale_1(self._sa_block(self.norm1(x), src_mask, src_key_padding_mask))
             if cross_attention_src is not None:
-                x = x + self.layer_scale_cross(
-                    self._cross_attention_block(
-                        self.norm_cross(x), cross_attention_src))
+                x = x + self.layer_scale_cross(self._cross_attention_block(self.norm_cross(x), cross_attention_src))
             x = x + self.layer_scale_2(self._ff_block(self.norm2(x)))
         else:
-            x = self.norm1(x + self.layer_scale_1(
-                self._sa_block(x, src_mask, src_key_padding_mask)))
+            x = self.norm1(x + self.layer_scale_1(self._sa_block(x, src_mask, src_key_padding_mask)))
             if cross_attention_src is not None:
-                x = self.norm_cross(
-                    x + self.layer_scale_cross(
-                        self._cross_attention_block(src, cross_attention_src)))
+                x = self.norm_cross(x + self.layer_scale_cross(self._cross_attention_block(src, cross_attention_src)))
             x = self.norm2(x + self.layer_scale_2(self._ff_block(x)))
         return x
 
@@ -611,15 +622,35 @@ class StreamingTransformer(StreamingModule):
         dtype (torch.dtype, optional): dtype to use.
         **kwargs: See `nn.TransformerEncoderLayer`.
     """
-    def __init__(self, d_model: int, num_heads: int, num_layers: int, dim_feedforward: int = 2048,
-                 dropout: float = 0.1, bias_ff: bool = True, bias_attn: bool = True,
-                 causal: bool = False, past_context: tp.Optional[int] = None,
-                 custom: bool = False, memory_efficient: bool = False, attention_as_float32: bool = False,
-                 cross_attention: bool = False, layer_scale: tp.Optional[float] = None,
-                 positional_embedding: str = 'sin', max_period: float = 10_000, positional_scale: float = 1.,
-                 xpos: bool = False, lr: tp.Optional[float] = None, weight_decay: tp.Optional[float] = None,
-                 layer_class: tp.Type[StreamingTransformerLayer] = StreamingTransformerLayer,
-                 checkpointing: str = 'none', device=None, dtype=None, **kwargs):
+
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        num_layers: int,
+        dim_feedforward: int = 2048,
+        dropout: float = 0.1,
+        bias_ff: bool = True,
+        bias_attn: bool = True,
+        causal: bool = False,
+        past_context: tp.Optional[int] = None,
+        custom: bool = False,
+        memory_efficient: bool = False,
+        attention_as_float32: bool = False,
+        cross_attention: bool = False,
+        layer_scale: tp.Optional[float] = None,
+        positional_embedding: str = "sin",
+        max_period: float = 10_000,
+        positional_scale: float = 1.0,
+        xpos: bool = False,
+        lr: tp.Optional[float] = None,
+        weight_decay: tp.Optional[float] = None,
+        layer_class: tp.Type[StreamingTransformerLayer] = StreamingTransformerLayer,
+        checkpointing: str = "none",
+        device=None,
+        dtype=None,
+        **kwargs,
+    ):
         super().__init__()
         assert d_model % num_heads == 0
 
@@ -629,31 +660,43 @@ class StreamingTransformer(StreamingModule):
         self.weight_decay = weight_decay
         self.lr = lr
 
-        assert positional_embedding in ['sin', 'rope', 'sin_rope']
+        assert positional_embedding in ["sin", "rope", "sin_rope"]
         self.rope: tp.Optional[RotaryEmbedding] = None
-        if self.positional_embedding in ['rope', 'sin_rope']:
+        if self.positional_embedding in ["rope", "sin_rope"]:
             assert _is_custom(custom, memory_efficient)
-            self.rope = RotaryEmbedding(d_model // num_heads, max_period=max_period,
-                                        xpos=xpos, scale=positional_scale, device=device)
+            self.rope = RotaryEmbedding(d_model // num_heads, max_period=max_period, xpos=xpos, scale=positional_scale, device=device)
 
         self.checkpointing = checkpointing
 
-        assert checkpointing in ['none', 'torch', 'xformers_default', 'xformers_mm']
-        if self.checkpointing.startswith('xformers'):
+        assert checkpointing in ["none", "torch", "xformers_default", "xformers_mm"]
+        if self.checkpointing.startswith("xformers"):
             _verify_xformers_internal_compat()
 
         self.layers = nn.ModuleList()
         for idx in range(num_layers):
             self.layers.append(
                 layer_class(
-                    d_model=d_model, num_heads=num_heads, dim_feedforward=dim_feedforward,
-                    dropout=dropout, bias_ff=bias_ff, bias_attn=bias_attn,
-                    causal=causal, past_context=past_context, custom=custom,
-                    memory_efficient=memory_efficient, attention_as_float32=attention_as_float32,
-                    cross_attention=cross_attention, layer_scale=layer_scale, rope=self.rope,
-                    device=device, dtype=dtype, **kwargs))
+                    d_model=d_model,
+                    num_heads=num_heads,
+                    dim_feedforward=dim_feedforward,
+                    dropout=dropout,
+                    bias_ff=bias_ff,
+                    bias_attn=bias_attn,
+                    causal=causal,
+                    past_context=past_context,
+                    custom=custom,
+                    memory_efficient=memory_efficient,
+                    attention_as_float32=attention_as_float32,
+                    cross_attention=cross_attention,
+                    layer_scale=layer_scale,
+                    rope=self.rope,
+                    device=device,
+                    dtype=dtype,
+                    **kwargs,
+                )
+            )
 
-        if self.checkpointing != 'none':
+        if self.checkpointing != "none":
             for layer in self.layers:
                 # see audiocraft/optim/fsdp.py, magic signal to indicate this requires fixing the
                 # backward hook inside of FSDP...
@@ -661,13 +704,12 @@ class StreamingTransformer(StreamingModule):
 
     def _apply_layer(self, layer, *args, **kwargs):
         method = self.checkpointing
-        if method == 'none':
+        if method == "none":
             return layer(*args, **kwargs)
-        elif method == 'torch':
+        elif method == "torch":
             return torch_checkpoint(layer, *args, use_reentrant=False, **kwargs)
-        elif method.startswith('xformers'):
-            from xformers.checkpoint_fairinternal import checkpoint, _get_default_policy
-            if method == 'xformers_default':
+        elif method.startswith("xformers"):
+            if method == "xformers_default":
                 # those operations will be saved, and not recomputed.
                 # According to Francisco we can get smarter policies but this is a good start.
                 allow_list = [
@@ -676,7 +718,7 @@ class StreamingTransformer(StreamingModule):
                     "aten.addmm.default",
                     "aten.mm.default",
                 ]
-            elif method == 'xformers_mm':
+            elif method == "xformers_mm":
                 # those operations will be saved, and not recomputed.
                 # According to Francisco we can get smarter policies but this is a good start.
                 allow_list = [
@@ -684,8 +726,15 @@ class StreamingTransformer(StreamingModule):
                     "aten.mm.default",
                 ]
             else:
-                raise ValueError(f"xformers checkpointing xformers policy {method} is not known.")
-            policy_fn = _get_default_policy(allow_list)
+                pass
+            # raise ValueError(f"xformers checkpointing xformers policy {method} is not known.")
+
+            try:
+                from xformers.checkpoint_fairinternal import checkpoint, _get_default_policy
+
+                policy_fn = _get_default_policy(allow_list)
+            except ImportError:
+                pass
             return checkpoint(layer, *args, policy_fn=policy_fn, **kwargs)
         else:
             raise ValueError(f"Checkpointing method {method} is unknown.")
@@ -693,12 +742,12 @@ class StreamingTransformer(StreamingModule):
     def forward(self, x: torch.Tensor, *args, **kwargs):
         B, T, C = x.shape
 
-        if 'offsets' in self._streaming_state:
-            offsets = self._streaming_state['offsets']
+        if "offsets" in self._streaming_state:
+            offsets = self._streaming_state["offsets"]
         else:
             offsets = torch.zeros(B, dtype=torch.long, device=x.device)
 
-        if self.positional_embedding in ['sin', 'sin_rope']:
+        if self.positional_embedding in ["sin", "sin_rope"]:
             positions = torch.arange(T, device=x.device).view(1, -1, 1)
             positions = positions + offsets.view(-1, 1, 1)
             pos_emb = create_sin_embedding(positions, C, max_period=self.max_period, dtype=x.dtype)
@@ -708,7 +757,7 @@ class StreamingTransformer(StreamingModule):
             x = self._apply_layer(layer, x, *args, **kwargs)
 
         if self._is_streaming:
-            self._streaming_state['offsets'] = offsets + T
+            self._streaming_state["offsets"] = offsets + T
 
         return x
 
@@ -723,32 +772,41 @@ class StreamingTransformer(StreamingModule):
 
 # special attention related function
 
+
 def _verify_xformers_memory_efficient_compat():
     try:
         from xformers.ops import memory_efficient_attention, LowerTriangularMask  # noqa
-    except ImportError:
-        raise ImportError(
-            "xformers is not installed. Please install it and try again.\n"
-            "To install on AWS and Azure, run \n"
-            "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.0'\\\n"
-            "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n"
-            "To install on FAIR Cluster, run \n"
-            "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='6.0;7.0'\\\n"
-            "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n")
+    except ImportError as exc:
+        import platform
+
+        if platform.system().lower() != "darwin":
+            raise ImportError(
+                "xformers is not installed. Please install it and try again.\n"
+                "To install on AWS and Azure, run \n"
+                "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.0'\\\n"
+                "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n"
+                "To install on FAIR Cluster, run \n"
+                "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='6.0;7.0'\\\n"
+                "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n"
+            ) from exc
 
 
 def _verify_xformers_internal_compat():
     try:
         from xformers.checkpoint_fairinternal import checkpoint, _get_default_policy  # noqa
-    except ImportError:
-        raise ImportError(
-            "Francisco's fairinternal xformers is not installed. Please install it and try again.\n"
-            "To install on AWS and Azure, run \n"
-            "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.0'\\\n"
-            "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n"
-            "To install on FAIR Cluster, run \n"
-            "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='6.0;7.0'\\\n"
-            "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n")
+    except ImportError as exc:
+        import platform
+
+        if platform.system().lower() != "darwin":
+            raise ImportError(
+                "Francisco's fairinternal xformers is not installed. Please install it and try again.\n"
+                "To install on AWS and Azure, run \n"
+                "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='8.0'\\\n"
+                "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n"
+                "To install on FAIR Cluster, run \n"
+                "FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST='6.0;7.0'\\\n"
+                "pip install -U git+https://git@github.com/fairinternal/xformers.git#egg=xformers\n"
+            ) from exc
 
 
 def _is_custom(custom: bool, memory_efficient: bool):
